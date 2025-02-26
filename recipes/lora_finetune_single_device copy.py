@@ -39,26 +39,6 @@ from torchtune.training import (
     PROFILER_KEY,
 )
 from tqdm import tqdm
-import json
-from typing import List
-import os
-
-import logging
-import time
-# Add these lines to configure the logger
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)  # This will output to console
-    ],
-    force=True,
-)
-
-logger = logging.getLogger(__name__)
-
-
-
 
 log = utils.get_logger("DEBUG")
 
@@ -242,7 +222,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
                 "Are you sure you passed in the right recipe checkpoint?"
             ) from e
 
-    def setup(self, cfg: DictConfig, model=None, adapter=None) -> None:
+    def setup(self, cfg: DictConfig) -> None:
         """
         Setup the recipe state. This includes recipe state (if resume_from_checkpoint is True),
         model, tokenizer, loss, optimizer, learning rate scheduler, sampler, and dataloader.
@@ -259,40 +239,22 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         # hook based on the config.
         common_utils._use_low_cpu_ram = cfg.get("low_cpu_ram", False)
 
-        if model is None:
-            # set up model
-            self._model = self._setup_model(
-                cfg_model=cfg.model,
-                enable_activation_checkpointing=cfg.enable_activation_checkpointing,
-                enable_activation_offloading=self._enable_activation_offloading,
-                compile_model=cfg.compile,
-                base_model_state_dict=checkpoint_dict[training.MODEL_KEY],
-                lora_weights_state_dict=(
-                    checkpoint_dict[training.ADAPTER_KEY]
-                    if self._resume_from_checkpoint
-                    else None
-                ),
-            )
+        # set up model
+        self._model = self._setup_model(
+            cfg_model=cfg.model,
+            enable_activation_checkpointing=cfg.enable_activation_checkpointing,
+            enable_activation_offloading=self._enable_activation_offloading,
+            compile_model=cfg.compile,
+            base_model_state_dict=checkpoint_dict[training.MODEL_KEY],
+            lora_weights_state_dict=(
+                checkpoint_dict[training.ADAPTER_KEY]
+                if self._resume_from_checkpoint
+                else None
+            ),
+        )
 
-            self._tokenizer = config.instantiate(cfg.tokenizer)
-            log.info("Tokenizer is initialized from file.")
-        else:
-            # set grad to None for all parameters
-            for param in model.parameters():
-                param.grad = None
-
-            lora_parameters = adapter #get_adapter_params(model)
-            for name, param in model.named_parameters():
-                if name in lora_parameters:
-                    # copy
-                    param.data.copy_(lora_parameters[name].data)
-                    param.grad = None
-
-
-            self._model = model
-
-            checkpoint_dict = {}
-
+        self._tokenizer = config.instantiate(cfg.tokenizer)
+        log.info("Tokenizer is initialized from file.")
 
         self._optimizer = self._setup_optimizer(
             cfg_optimizer=cfg.optimizer,
@@ -589,105 +551,6 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
 
         return sampler, dataloader
 
-
-    def save_adapter_config(
-        self,
-        path: str,
-        base_model_path: str,
-        # lora_rank: int = 64,
-        peft_type: str = "LORA",
-        lora_alpha: float = 16.0,
-        lora_attn_modules: List[str] = ["q_proj", "v_proj"],
-        lora_to_mlp: bool = True,
-        lora_to_output: bool = False,
-    ):
-        # This config is used by VLLM
-        # Target modules is not the same as we use in training, but rather inclusive of all
-        # because I was getting weird bugs in VLLM part
-        target_modules = []
-        if lora_to_mlp:
-            target_modules += ["gate_proj", "down_proj", "up_proj"]
-        if lora_to_output:
-            target_modules += ["lm_head"]
-        if lora_attn_modules:
-            target_modules += lora_attn_modules
-
-        config = {
-            "base_model_name_or_path": base_model_path,
-            "bias": "none",
-            "fan_in_fan_out": False,
-            "inference_mode": True,
-            "init_lora_weights": True,
-            "lora_alpha": lora_alpha,
-            "lora_dropout": 0.0,
-            "modules_to_save": None,
-            "peft_type": peft_type,
-            "r": self._lora_rank,
-            "target_modules": target_modules,
-            "task_type": "CAUSAL_LM",
-        }
-        with open(path, "w") as f:
-            json.dump(config, f)
-
-
-
-
-    def save_adapter(self, args: dict, iteration: int) -> None:
-        
-        if 'num_saved_adapters' not in globals():
-            num_saved_adapters = 0
-
-
-        # save the adapter
-        final_adapter = self.adapter_params
-        # final_adapter = lora_finetune_distributed.get_adapter_params(model)
-        # save
-        replacements = {
-            "_orig_mod.": "",
-            "layers.": "base_model.model.model.layers.",
-            "w1": "gate_proj",
-            "w2": "down_proj",
-            "w3": "up_proj",
-            ".attn": ".self_attn",
-            "_checkpoint_wrapped_module.": "",
-            "lora_b": "lora_B",
-            "lora_a": "lora_A",
-            "output.lora_": "base_model.model.lm_head.lora_",
-        }
-
-        saved_dict = {}
-        for name, param in final_adapter.items():
-            for old, new in replacements.items():
-                name = name.replace(old, new)
-            saved_dict[name] = param
-
-        # create experiment and task folder if it doesn't exist
-        experiment_folder = f"{args['experiment_folder']}_{iteration}"
-        os.makedirs(experiment_folder, exist_ok=True)
-
-        task_folder = f"{experiment_folder}/{args['task_id']}"
-        os.makedirs(task_folder, exist_ok=True)
-
-        adapter_path = f"{task_folder}/adapter_model.bin"
-        # adapter_path = args["adapter_path"] + f"_{iteration}"
-        torch.save(saved_dict, adapter_path)
-        num_saved_adapters += 1
-        saved_dict = None
-
-        # create experiment folder if it doesn't exist
-        logger.debug(f"Saving adapter config for {args['task_id']} to {task_folder}/adapter_config.json")
-        adapter_config_path = f"{task_folder}/adapter_config.json"
-        self.save_adapter_config(
-            adapter_config_path,
-            args['base_checkpoint_dir'],
-            # lora_rank=args['lora_rank'],
-            lora_alpha=args['lora_alpha'],
-            lora_attn_modules=args['lora_attn_modules'],
-            lora_to_mlp=args['lora_to_mlp'],
-            lora_to_output=args['lora_to_output'],
-        )
-
-
     def save_checkpoint(self, epoch: int) -> None:
         """
         Checkpoint the state of the recipe. The constructed checkpoint state dict
@@ -776,7 +639,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
 
         return loss
 
-    def train(self, args_dict: dict) -> None:
+    def train(self) -> None:
         """
         The core training loop.
         """
@@ -790,7 +653,6 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         t0 = time.perf_counter()
         running_loss = 0
         num_tokens = 0
-        self._optimizer.zero_grad(set_to_none=True)
 
         with self._profiler as prof:
             # self.epochs_run should be non-zero when we're resuming from a checkpoint
@@ -800,12 +662,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
                 self._sampler.set_epoch(curr_epoch)
 
                 pbar = tqdm(total=self._steps_per_epoch)
-                logger.debug(f"len of dataloader: {len(self._dataloader)}")
-                
                 for idx, batch in enumerate(self._dataloader):
-                    # log iteration
-                    logger.debug(f"Iteration {idx}")
-
                     if (
                         self.max_steps_per_epoch is not None
                         and (idx // self._gradient_accumulation_steps)
@@ -891,29 +748,15 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
                     # if the schedule cycle doesn't align with gradient accumulation.
                     prof.step()
 
-                    # Save adapter at specified intervals and in the last iteration
-
-                    save_iterations = {2,4,6,8,10,20,40,60,70, 80, 100, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000}
-
-                    #####
-                    # SAVE ADAPTERS intermediate steps
-                    if ( self.global_step in save_iterations or
-                        # save last iteration
-                        (self.global_step == self.total_epochs * self._steps_per_epoch - 1) 
-                    ):
-                        logger.debug(f"Saving adapter for {args_dict['task_id']} to {args_dict['adapter_path']} at iteration {self.global_step}")
-                        self.save_adapter(args_dict, self.global_step)
-                    #####
-
                 self.epochs_run += 1
-                # start_save_checkpoint = time.perf_counter()
-                # log.info("Starting checkpoint save...")
-                # self.save_checkpoint(epoch=curr_epoch)
-                # log.info(
-                #     "Checkpoint saved in {:.2f} seconds.".format(
-                #         time.perf_counter() - start_save_checkpoint
-                #     )
-                # )
+                start_save_checkpoint = time.perf_counter()
+                log.info("Starting checkpoint save...")
+                self.save_checkpoint(epoch=curr_epoch)
+                log.info(
+                    "Checkpoint saved in {:.2f} seconds.".format(
+                        time.perf_counter() - start_save_checkpoint
+                    )
+                )
 
     def cleanup(self) -> None:
         self._metric_logger.close()

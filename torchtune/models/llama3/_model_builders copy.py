@@ -36,9 +36,7 @@ def llama3_8b() -> TransformerDecoder:
         num_heads=32,
         num_kv_heads=8,
         embed_dim=4096,
-        # max_seq_len=8192,
-        # TODO: this is the max seq len for llama3
-        max_seq_len=20000,
+        max_seq_len=8192,
         intermediate_dim=14336,
         attn_dropout=0.0,
         norm_eps=1e-5,
@@ -135,9 +133,7 @@ def lora_llama3_8b(
         num_heads=32,
         num_kv_heads=8,
         embed_dim=4096,
-        # max_seq_len=8192,
-        # TODO: this is the max seq len for llama3
-        max_seq_len=20000,
+        max_seq_len=8192,
         intermediate_dim=14336,
         attn_dropout=0.0,
         norm_eps=1e-5,
