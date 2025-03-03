@@ -632,7 +632,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
 
 
 
-    def save_adapter(self, args: dict, iteration: int) -> None:
+    def save_adapter(self, args: dict, iteration: int, epoch: int) -> None:
         
         if 'num_saved_adapters' not in globals():
             num_saved_adapters = 0
@@ -662,7 +662,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
             saved_dict[name] = param
 
         # create experiment and task folder if it doesn't exist
-        experiment_folder = f"{args['experiment_folder']}_{iteration}"
+        experiment_folder = f"{args['experiment_folder']}_ep_{epoch}_iter_{iteration}"
         os.makedirs(experiment_folder, exist_ok=True)
 
         task_folder = f"{experiment_folder}/{args['task_id']}"
@@ -893,17 +893,21 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
 
                     # Save adapter at specified intervals and in the last iteration
 
-                    save_iterations = {2,4,6,8,10,20,40,60,70, 80, 100, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000}
+                    # save_iterations = {2, 4,6,8,10,20,40,60,70, 80, 100, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000}
+                    # save_iterations = {25, 50, 75,  100, 125,  150, 175,  200 }
+                    save_iterations = {50, 100, 150, 200}
 
                     #####
                     # SAVE ADAPTERS intermediate steps
-                    if ( self.global_step in save_iterations or
-                        # save last iteration
-                        (self.global_step == self.total_epochs * self._steps_per_epoch - 1) 
+                    if ( self.global_step in save_iterations 
+                        or (self.global_step == self.total_epochs * self._steps_per_epoch - 1) # save last iteration
                     ):
-                        logger.debug(f"Saving adapter for {args_dict['task_id']} to {args_dict['adapter_path']} at iteration {self.global_step}")
-                        self.save_adapter(args_dict, self.global_step)
-                    #####
+                        logger.debug(f"Saving adapter for {args_dict['task_id']} to {args_dict['adapter_path']} at iteration {self.global_step}, and epoch {curr_epoch}")
+                        self.save_adapter(args_dict, self.global_step, epoch=curr_epoch)
+
+
+                logger.debug(f"Saving adapter for {args_dict['task_id']} to {args_dict['adapter_path']} at iteration {-1}, and epoch {curr_epoch}")
+                self.save_adapter(args_dict, -1, epoch=curr_epoch)
 
                 self.epochs_run += 1
                 # start_save_checkpoint = time.perf_counter()
